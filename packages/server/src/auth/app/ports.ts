@@ -48,3 +48,11 @@ export class TokenStoreCorruptionError extends Error {
     this.name = "TokenStoreCorruptionError";
   }
 }
+
+/** 设备数量达上限；调用方（如配对 claim）映射为 409。 */
+export class DeviceTokenLimitError extends Error {
+  constructor(public readonly limit: number) {
+    super(`Device token limit reached: ${limit}`);
+    this.name = "DeviceTokenLimitError";
+  }
+}

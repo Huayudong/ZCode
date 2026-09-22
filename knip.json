@@ -25,7 +25,9 @@
         "src/entry-stdio.ts",
         "build-remote.ts",
         "src/auth/module.ts",
-        "src/auth/contract.example.ts"
+        "src/auth/contract.example.ts",
+        "src/pairing/module.ts",
+        "src/pairing/contract.example.ts"
       ]
     },
     "packages/services": {

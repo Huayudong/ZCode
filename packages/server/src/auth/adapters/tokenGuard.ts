@@ -60,38 +60,15 @@ function seedLiteTokenCookie(c: Context, token: string): void {
   );
 }
 
-async function hasValidCredential(
-  c: Context,
-  adminToken: string | undefined,
-  registry: DeviceTokenRegistryPort | undefined,
-): Promise<boolean> {
-  const url = new URL(c.req.url);
-  const bearerToken = extractBearerToken(c.req.header("authorization"));
-  const queryToken = url.searchParams.get("token");
-  const cookieToken = parseCookieHeader(c.req.header("cookie")).get(zcodeLiteTokenCookieName);
-  const presented = bearerToken ?? queryToken ?? cookieToken;
-  if (!presented) {
-    return false;
-  }
-  if (adminToken !== undefined && timingSafeTokenEqual(presented, adminToken)) {
-    // 保留既有行为：query 通道命中后种 HttpOnly cookie，后续请求免带 token。
-    if (!bearerToken && queryToken !== null) {
-      seedLiteTokenCookie(c, presented);
-    }
-    return true;
-  }
-  if (!registry) {
-    return false;
-  }
-  // registry.verify 的契约是不 reject、失败返回 false（fail-closed）。
-  return registry.verify(presented);
-}
-
 export interface TokenGuardOptions {
   /** 管理员 token（env/options 解析结果）。 */
   adminToken?: string;
   /** 设备 token 注册表；未提供时仅管理员 token 可鉴权。 */
   deviceTokenRegistry?: DeviceTokenRegistryPort;
+  /** 仅管理员可访问的路径（精确匹配）；设备 token 命中返回 403，无/坏凭证返回 401。 */
+  adminOnlyPaths?: readonly string[];
+  /** 免管理员鉴权路径（精确匹配），由请求自身凭证保护（如配对 claim 的一次性 pairCode）。 */
+  publicPaths?: readonly string[];
 }
 
 /**
@@ -103,13 +80,44 @@ export function createTokenGuard(options: TokenGuardOptions): MiddlewareHandler 
   if (!adminToken && !registry) {
     return undefined;
   }
+  const adminOnlyPaths = new Set(options.adminOnlyPaths ?? []);
+  const publicPaths = new Set(options.publicPaths ?? []);
   return async (c, next) => {
     const pathname = new URL(c.req.url).pathname;
     if (!isTokenProtectedPath(pathname)) {
       await next();
       return;
     }
-    if (await hasValidCredential(c, adminToken, registry)) {
+    if (publicPaths.has(pathname)) {
+      await next();
+      return;
+    }
+    const url = new URL(c.req.url);
+    const bearerToken = extractBearerToken(c.req.header("authorization"));
+    const queryToken = url.searchParams.get("token");
+    const cookieToken = parseCookieHeader(c.req.header("cookie")).get(zcodeLiteTokenCookieName);
+    const presented = bearerToken ?? queryToken ?? cookieToken;
+    if (!presented) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    if (adminToken !== undefined && timingSafeTokenEqual(presented, adminToken)) {
+      // 保留既有行为：query 通道命中后种 HttpOnly cookie，后续请求免带 token。
+      if (!bearerToken && queryToken !== null) {
+        seedLiteTokenCookie(c, presented);
+      }
+      await next();
+      return;
+    }
+    if (!registry) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    // registry.verify 的契约是不 reject、失败返回 false（fail-closed）。
+    const deviceMatched = await registry.verify(presented);
+    if (deviceMatched && adminOnlyPaths.has(pathname)) {
+      // 合法设备 token、但该端点仅管理员可用：403 而非 401（区分"没登录"与"权限不足"）。
+      return c.json({ error: "Forbidden" }, 403);
+    }
+    if (deviceMatched) {
       await next();
       return;
     }

@@ -5,7 +5,14 @@
  */
 export { createDeviceTokenRegistry } from "./adapters/createDeviceTokenRegistry.js";
 export { createTokenGuard, isTokenProtectedPath } from "./adapters/tokenGuard.js";
-export { DEVICE_TOKEN_LIMITS, type DeviceTokenRecord } from "./domain/tokenRegistry.js";
+export { sha256TokenHasher } from "./adapters/tokenCrypto.js";
+export {
+  constantTimeHexEqual,
+  DEVICE_TOKEN_LIMITS,
+  normalizeDeviceName,
+  type DeviceTokenRecord,
+} from "./domain/tokenRegistry.js";
+export { DeviceTokenLimitError, TokenStoreCorruptionError } from "./app/ports.js";
 export type {
   DeviceTokenRegistryPort,
   RegistryLogger,

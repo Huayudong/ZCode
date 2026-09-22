@@ -42,6 +42,12 @@ import {
   isTokenProtectedPath,
   type DeviceTokenRegistryPort,
 } from "./auth/contract.js";
+import {
+  PAIRING_ADMIN_ONLY_PATHS,
+  PAIRING_PUBLIC_PATHS,
+  createPairingRoutes,
+  type PairingServicePort,
+} from "./pairing/contract.js";
 
 function wrapWebSocket(ws: WebSocket): ISocket {
   const onData = new Emitter<VSBuffer>();
@@ -141,6 +147,10 @@ interface HttpServerOptions {
   authToken?: string;
   /** 设备 token 注册表（server.auth 模块）；仅与鉴权启用场景搭配（entry-http 在有管理员 token 时接线）。 */
   deviceTokenRegistry?: DeviceTokenRegistryPort;
+  /** 配对服务（server.pairing 模块）；与 deviceTokenRegistry 同时接线才生效。 */
+  pairingService?: PairingServicePort;
+  /** 自签证书 SPKI 指纹（E3），随配对响应下发给 App 做证书固定。 */
+  certFingerprint?: string;
   spaFallback?: boolean;
   staticRoot?: string;
   workspaces?: ServerRemoteWorkspaceInfo[];
@@ -306,9 +316,13 @@ export function createHttpServer(
   // 管理员 token 唯一解析来源（含旧环境变量兼容与告警），同时供 server-info 使用。
   const effectiveAuthToken = resolveEffectiveAuthToken(options);
   const authEnabled = Boolean(effectiveAuthToken) || Boolean(options.deviceTokenRegistry);
+  const pairingEnabled = Boolean(options.pairingService && options.deviceTokenRegistry);
   const tokenGuard = createTokenGuard({
     adminToken: effectiveAuthToken,
     deviceTokenRegistry: options.deviceTokenRegistry,
+    ...(pairingEnabled
+      ? { adminOnlyPaths: PAIRING_ADMIN_ONLY_PATHS, publicPaths: PAIRING_PUBLIC_PATHS }
+      : {}),
   });
   if (tokenGuard) {
     app.use("*", tokenGuard);
@@ -316,6 +330,23 @@ export function createHttpServer(
 
   app.get("/api/server-info", (c) => c.json(createServerInfo(options, authEnabled)));
   app.post("/api/rpc-host-capability", (c) => c.json(hostCapabilities.issue()));
+
+  if (options.pairingService && options.deviceTokenRegistry) {
+    app.route(
+      "/",
+      createPairingRoutes({
+        pairingService: options.pairingService,
+        deviceRegistry: options.deviceTokenRegistry,
+        serverIdentity: {
+          serverId: resolveServerId(options),
+          ...(options.name?.trim() ? { name: options.name.trim() } : {}),
+          ...(options.certFingerprint?.trim()
+            ? { certFingerprint: options.certFingerprint.trim() }
+            : {}),
+        },
+      }),
+    );
+  }
 
   // 普通 `/ws` 永远是 terminal-client；浏览器/任意客户端设置旧 mode header
   // 都不能再把自己提升为 trusted host。
