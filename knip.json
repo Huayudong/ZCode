@@ -27,7 +27,9 @@
         "src/auth/module.ts",
         "src/auth/contract.example.ts",
         "src/pairing/module.ts",
-        "src/pairing/contract.example.ts"
+        "src/pairing/contract.example.ts",
+        "src/tls/module.ts",
+        "src/tls/contract.example.ts"
       ]
     },
     "packages/services": {

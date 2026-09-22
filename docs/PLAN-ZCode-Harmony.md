@@ -468,6 +468,19 @@ M4 公测上架：A13 合规材料（软著/隐私标签/生成内容定位说�
 
 范围调整：桌面 Web 设置页出码分区（spec §5）移至 Batch 3，与 E3 TLS 同批（同属"桌面出码体验"主题）；Batch 2 的配对链路已可通过 HTTP 全流程闭环并被测试覆盖。环境问题（F 盘 USB I/O、透明加密驱动）沿用 Batch 1 的 D 盘克隆验证方案。
 
+### Batch 3（2026-09-22）：E3 自签 TLS + 桌面出码分区
+
+| 项 | 状态 | 产物 |
+| --- | --- | --- |
+| tls spec | ✅ | `docs/specs/harmony/tls.md`（材料三方式、指纹口径、fail-fast、验收 T1-T5） |
+| server.tls 受控模块 | ✅ | `packages/server/src/tls/`：domain（forge 自签生成 + SPKI SHA-256 指纹，无 node: 依赖）/adapters（`resolveTlsMaterial`：显式 PEM → 自签幂等 → 无）；契约四件套 + `node-forge.d.ts` 最小环境声明；`architecture-policy.yaml` 注册 `server.tls` |
+| HTTPS 接入 | ✅ | `http.ts`：`https.createServer + getRequestListener + injectWebSocket`（WSS 同源升级不变）；`entry-http` 读取 `ZCODE_SERVER_TLS_CERT/KEY`、`ZCODE_SERVER_TLS_SELF_SIGNED=1`，解析失败 fail-fast 阻止启动；非 loopback 无 TLS 时启动明文风险 warn |
+| 指纹下发 | ✅ | `server-info.capabilities.certFingerprint`（additive）；配对 code/claim 响应携带同一指纹（App 端 QR `fp` 证书固定） |
+| TLS 测试 | ✅ 6/6 通过 | T1 指纹与 node `X509Certificate` 独立计算一致、T2 HTTPS server-info、T3 配对响应同指纹、T4 fail-fast、T5 纯 HTTP 回归、自签幂等 |
+| 桌面出码分区 | ✅ | `packages/ui/src/settings/MobilePairingSection.tsx`（同源 REST 出码/二维码/倒计时/设备列表/二次确认吊销）；三处注册（settingsNavigation/settingsPageConfig/SettingsPage）；i18n zh-CN + en-US 文案；桌面形态显示占位说明（Q1 未决）。qrcode 复用既有依赖，零新增 |
+| 网络指南 | ✅ | `docs/harmony-networking.md`：Tailscale（推荐）/局域网直连/自有证书与反代三方案 + "不要端口映射裸奔"告诫 |
+| 门禁 | ✅ | server 测试 28/28（auth 13 + pairing 9 + tls 6，串行跑两遍稳定——并行时 auth 用例曾出现 Windows rename 竞争偶发，test script 已加 `--test-concurrency=1`）、server-cli 3/3、typecheck 全仓 0 错误、architecture 0 违规（含 server.tls）、定向 lint 0 错误且新文件 0 警告 |
+
 ## 11. 下一步（按顺序）
 
 1. 确认 §9 的 Q1-Q4（Q3 阻塞 A6 的 INP-6 spec）；

@@ -22,6 +22,8 @@ export const serverRemoteInfoSchema = z.object({
     processResourceTelemetry: z.boolean().optional(),
     // 鉴权通道能力位（E1）：老 server 不带该字段，客户端须按仅 query/cookie 兜底。
     authSchemes: z.array(z.enum(["bearer", "cookie", "query"])).optional(),
+    // 证书固定指纹（E3，SPKI SHA-256 hex）：仅 TLS 启用时下发；缺失表示无证书固定。
+    certFingerprint: z.string().optional(),
   }),
 });
 
