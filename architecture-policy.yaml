@@ -45,6 +45,14 @@ modules:
     layers: { domain: domain, app: app, adapters: adapters }
     layerOrder: [domain, app, adapters]
     owner: harmony-mobile
+  - id: server.pairing
+    roots: [packages/server/src/pairing]
+    managed: true
+    requires: [server.auth]
+    publicEntrypoints: [packages/server/src/pairing/contract.ts]
+    layers: { domain: domain, app: app, adapters: adapters }
+    layerOrder: [domain, app, adapters]
+    owner: harmony-mobile
   - id: zcode-server-cli
     roots: [packages/zcode-server-cli/src]
     managed: false

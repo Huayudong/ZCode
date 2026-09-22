@@ -453,6 +453,21 @@ M4 公测上架：A13 合规材料（软著/隐私标签/生成内容定位说�
 4. **fmt:check / knip 环境受阻**：本机透明加密驱动导致原生进程（node/oxfmt/git.exe）对部分 `.mjs`/配置读到密文（MSYS 工具读到明文）。`fmt:check` 对逐字节一致的未改动基线文件（如 `packages/services/src/storage` 13/13）也全量报格式问题，属基线级环境问题；knip 在 fast-glob 枚举中遇到驱动损坏的脏路径稳定崩溃。两者均与本批改动无关。
 5. 遗留：`D:\zcode-build` 为一次性验证克隆，确认后可删除；`F:` 工作树的首次全量安装建议在更换 SSD 或处理加密驱动后执行。
 
+### Batch 2（2026-09-22）：E2 配对服务实现（服务端闭环）
+
+| 项 | 状态 | 产物 |
+| --- | --- | --- |
+| pairing spec 细化 | ✅ | `docs/specs/harmony/pairing.md`：鉴权分级（adminOnlyPaths/publicPaths）、频控窗口细节、claim 同步段原子性、二维码 URL 改由桌面 UI 拼装（server 的 host 可能是 0.0.0.0，Web 用自身 location 才是手机可达地址） |
+| auth 契约扩展 | ✅ | 导出 `normalizeDeviceName`/`constantTimeHexEqual`/`sha256TokenHasher`；新增 `DeviceTokenLimitError`（issue 达上限时抛出） |
+| tokenGuard 鉴权分级 | ✅ | `adminOnlyPaths`（设备 token → 403）、`publicPaths`（claim 免管理员鉴权，由一次性 pairCode 自保） |
+| server.pairing 受控模块 | ✅ | `packages/server/src/pairing/`：domain（pairCode 判定+请求 schema）/app（单活跃码 + 同步段消费 + 频控计数器）/adapters（组合根 + Hono 四路由）；契约四件套；`architecture-policy.yaml` 注册 `server.pairing`（requires [server.auth]） |
+| REST 端点 | ✅ | `POST /api/pairing/code`（管理员）、`POST /api/pairing/claim`（公开+频控 10 次/分/IP，429+Retry-After）、`GET /api/pairing/devices`、`DELETE /api/pairing/devices/:id` |
+| http/entry 接线 | ✅ | `pairingService`/`certFingerprint` 进入 `HttpServerOptions`；entry-http 在有管理员 token 时与设备表一同接线 |
+| 配对测试 | ✅ 9/9 通过 | P1 全链路、P2 重放 401、P3 TTL 过期、P4 并发唯一成功、P5 设备 token 403、频控 429、body 校验、吊销端点、设备上限 409 且不回滚 |
+| 门禁 | ✅ | server 测试 22/22（auth 13 + pairing 9）、server-cli 3/3、typecheck 全仓 0 错误、architecture 全量 0 违规（含新模块）、定向 lint 0 错误（环境限制同 Batch 1） |
+
+范围调整：桌面 Web 设置页出码分区（spec §5）移至 Batch 3，与 E3 TLS 同批（同属"桌面出码体验"主题）；Batch 2 的配对链路已可通过 HTTP 全流程闭环并被测试覆盖。环境问题（F 盘 USB I/O、透明加密驱动）沿用 Batch 1 的 D 盘克隆验证方案。
+
 ## 11. 下一步（按顺序）
 
 1. 确认 §9 的 Q1-Q4（Q3 阻塞 A6 的 INP-6 spec）；

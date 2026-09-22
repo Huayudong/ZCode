@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 状态 | 草案已评审，实现排 Batch 2 |
+| 状态 | 已评审（Batch 2 实现，含下述细化决策） |
 | 对应计划 | `docs/PLAN-ZCode-Harmony.md` §4-E2；依赖 E1（`docs/specs/harmony/auth.md`）的设备 token 表 |
 | 模块 | `server.pairing`（Batch 2 注册 managed 模块） |
 
@@ -14,47 +14,54 @@
 
 | 端点 | 鉴权 | 请求 | 响应 |
 | --- | --- | --- | --- |
-| `POST /api/pairing/code` | 管理员 token | `{}` | `{ url, pairCodeId, expiresAt, certFingerprint? }` |
-| `POST /api/pairing/claim` | pairCode（body 携带） | `{ pairCode, deviceName, pushToken? }` | `{ accessToken, serverId, serverName?, certFingerprint? }` |
+| `POST /api/pairing/code` | 管理员 token | `{}` | `{ pairCode, pairCodeId, expiresAt, certFingerprint? }` |
+| `POST /api/pairing/claim` | pairCode（body 携带，公开路径） | `{ pairCode, deviceName, pushToken? }` | `{ accessToken, serverId, serverName?, certFingerprint? }` |
 | `GET /api/pairing/devices` | 管理员 token | — | `{ devices: DeviceTokenRecord[] }`（复用 auth 模块记录） |
-| `DELETE /api/pairing/devices/:id` | 管理员 token | — | `{ ok: true }`（吊销，透传 auth 模块） |
+| `DELETE /api/pairing/devices/:id` | 管理员 token | — | `{ ok: true }`（吊销，透传 auth 模块；id 不存在返回 404） |
 
-- 二维码 URL 契约：`zcode://pair?host=<host>&port=<port>&token=<pairCode>&name=<serverName>&fp=<certFingerprint?>`；`fp` 为自签证书 SPKI SHA-256 hex（E3 提供时携带）；各值 `encodeURIComponent`。
-- `pairCode`：CSPRNG 随机、TTL 5 分钟、**一次性**（claim 成功或同 ID 重放均作废）；同一时刻未消费 pairCode 最多 1 个（新签发作废旧的）。
-- `claim` 成功即调用 auth 模块 `issue({ deviceName })` 签发设备 accessToken；`pushToken` 字段本期仅存储透传给 E5（Push）预留，M1 无消费方。
+- **二维码 URL 由桌面 UI 拼装**（Batch 2 细化决策）：server 返回 `pairCode` 明文与 `expiresAt`，Web 设置页用自身 `location.hostname`/`port` 组装 `zcode://pair?host=…&port=…&token=<pairCode>&name=<serverName>&fp=<certFingerprint?>`——server 侧 `options.host` 可能是 `0.0.0.0`/undefined，无法替手机选出正确局域网地址；用户打开 Web 用的主机名才是手机可达地址。`fp` 为自签证书 SPKI SHA-256 hex（E3 提供时携带）；各值 `encodeURIComponent`。
+- **鉴权分级落在 tokenGuard**（单一守卫路径）：`adminOnlyPaths`（`/api/pairing/code`、`/api/pairing/devices`）——设备 token 命中返回 **403**，无凭证/凭证无效返回 401；`publicPaths`（`/api/pairing/claim`）——免管理员鉴权，由一次性 pairCode 自身保护。
+- `pairCode`：CSPRNG 随机（`zpc_` + 32 hex）、TTL 5 分钟、**一次性**；同一时刻未消费 pairCode 至多 1 个（新签发作废旧的）。
+- `claim` 成功即调用 auth 模块 `issue({ deviceName })` 签发设备 accessToken；`pushToken` 可选、≤256 字符、仅存内存（E5 消费，不落盘不入日志）。
 
 ## 2. 状态所有者
 
 ```text
-pairCode 生命周期 → 唯一所有者：PairingService（server.pairing 模块，进程内存）
+pairCode 生命周期 → 唯一所有者：PairingService（server.pairing 模块，进程内存，单活跃码）
 设备 accessToken  → 唯一所有者：server.auth 的 DeviceTokenRegistry（E1 已建）
+claim 频控计数    → server.pairing 的固定窗口计数器（进程内存，IP → {count, windowStartMs}）
 所有者边界：pairing 只调用 auth 的 issue/list/revoke，不复制 token 表、不缓存 accessToken。
 ```
 
-事件顺序（claim）：
+事件顺序（claim，原子性关键）：
 
 ```text
-校验 pairCode 存在且未过期 → 原子消费（先标记 consumed 再签发，签发失败同样作废 pairCode）
-  → auth.issue({ deviceName }) → 返回 accessToken
-  → 成功日志（仅 pairCodeId + 设备名）
+频控检查 → 同步段（单线程内原子，杜绝并发重放窗口）：
+  hash(明文 pairCode) → 与活跃码 codeHash 常量时间比对 → 校验未过期 → 立即消费（活跃码清空）
+→ 异步段：auth.issue({ deviceName }) → 返回 accessToken
+（签发失败不回滚 pairCode——用户重新出码，避免半配对状态，spec §4）
 ```
 
 ## 3. 不变量
 
-1. pairCode 明文只出现在二维码 URL 与 claim 请求中；服务端只存 hash（复用 auth 的 hasher）。
+1. pairCode 明文只出现在出码响应（二维码内容）与 claim 请求中；服务端只存 hash（复用 auth 的 sha256TokenHasher）。
 2. 过期、已消费、不存在的 pairCode 统一返回 401 `{ error: "Invalid pairing code" }`（不区分原因，防枚举）。
-3. 并发 claim 同一 pairCode：仅一个成功（消费先于签发的单线程许可内完成，Node 进程内无锁竞争）。
-4. `deviceName` 校验同 auth spec §3.7（trim、≤64 字符、无控制字符）；空则 400。
-5. claim 频控：同源（IP）每分钟 ≤10 次，超出 429（M1 简单计数器，进程内存）。
-6. 配对管理端点仅管理员 token 可用（设备 token 调用返回 403）。
+3. 并发 claim 同一 pairCode：仅一个成功——消费在同步段完成（Node 单线程内无 await 间隙），后到者见活跃码已清空。
+4. `deviceName` 复用 auth 的 `normalizeDeviceName`（trim、剔控制字符、≤64 字符）；空则 400。`pushToken` trim 后 ≤256 字符，超长 400。
+5. claim 频控：同源（IP）固定窗口 60 秒内 ≤10 次，超出 429（含 `Retry-After`）；计数含失败尝试；计数表惰性重置、上限 10000 个 IP（超出整体清空，防无界增长）。
+6. 配对管理端点仅管理员 token 可用（guard 的 `adminOnlyPaths`，设备 token → 403）。
 
 ## 4. 失败语义
 
 | 场景 | 行为 |
 | --- | --- |
-| auth.issue 落盘失败 | claim 返回 500 `{ error: "Failed to issue device token" }`，pairCode 已作废（用户需重新出码，避免半配对状态） |
-| 二维码过期后再扫码 | 401（同 §3.2） |
-| claim 时设备数超上限（auth §3.7 的 64） | 409 `{ error: "Device limit reached" }` |
+| 无凭证/坏凭证访问管理端点 | 401（guard 既有语义） |
+| 设备 token 访问管理端点 | 403（合法设备、权限不足） |
+| body 非法（缺 deviceName、超长 pushToken、坏 JSON） | 400 `{ error: "Invalid request body: …" }` |
+| pairCode 无效/过期/已消费 | 401 `{ error: "Invalid pairing code" }` |
+| 频控超限 | 429 `{ error: "Too many pairing attempts" }` + `Retry-After` |
+| auth.issue 设备数达上限 | 409 `{ error: "Device limit reached" }`（auth 抛 `DeviceTokenLimitError`） |
+| auth.issue 其他落盘失败 | 500 `{ error: "Failed to issue device token" }`，pairCode 已作废 |
 
 ## 5. 桌面 UI（packages/ui）
 

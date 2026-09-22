@@ -16,6 +16,7 @@ import type {
   TokenHasher,
   TokenRecordStore,
 } from "./ports.js";
+import { DeviceTokenLimitError } from "./ports.js";
 
 export interface CreateDeviceTokenRegistryCoreOptions {
   hasher: TokenHasher;
@@ -70,7 +71,7 @@ export function createDeviceTokenRegistryCore(
       return enqueueWrite(async () => {
         const records = await ensureLoaded();
         if (records.filter((record) => record.revokedAt === undefined).length >= DEVICE_TOKEN_LIMITS.maxRecords) {
-          throw new Error(`设备数量已达上限 ${DEVICE_TOKEN_LIMITS.maxRecords}`);
+          throw new DeviceTokenLimitError(DEVICE_TOKEN_LIMITS.maxRecords);
         }
         const token = tokens.generateToken();
         const record: DeviceTokenRecord = {
