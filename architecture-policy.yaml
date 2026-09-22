@@ -37,6 +37,14 @@ modules:
   - id: server
     roots: [packages/server/src]
     managed: false
+  - id: server.auth
+    roots: [packages/server/src/auth]
+    managed: true
+    requires: [shared, services]
+    publicEntrypoints: [packages/server/src/auth/contract.ts]
+    layers: { domain: domain, app: app, adapters: adapters }
+    layerOrder: [domain, app, adapters]
+    owner: harmony-mobile
   - id: zcode-server-cli
     roots: [packages/zcode-server-cli/src]
     managed: false

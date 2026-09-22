@@ -1,9 +1,11 @@
+import { join } from "node:path";
 import { createLocalServices, getAppConfigDir } from "@zcode/services/node";
 import {
   materializeBundledZCodeBuiltinProviderConfig,
   readBundledZCodeBuiltinProviderConfig,
 } from "./bundledZCodeBuiltinProviderConfig.js";
 import { createHttpServer } from "./http.js";
+import { createDeviceTokenRegistry } from "./auth/contract.js";
 
 async function main(): Promise<void> {
   const zcodeBuiltinProviderConfigFilePath = await materializeBundledZCodeBuiltinProviderConfig({
@@ -18,11 +20,17 @@ async function main(): Promise<void> {
     zcodeBuiltinProviderConfigFilePath,
     providerProvisioningTargetEnabled: Boolean(authToken),
   });
+  // 设备 token 表只在鉴权已启用的 server 上接线：它扩展一个已鉴权的 server，
+  // 不把默认开放的本机 dev server 变成"谁都无法访问"（auth spec §6 迁移边界）。
+  const deviceTokenRegistry = authToken
+    ? createDeviceTokenRegistry({ filePath: join(getAppConfigDir(), "access-tokens.json") })
+    : undefined;
 
   createHttpServer(services, port, {
     ...(host ? { host } : {}),
     ...(staticRoot ? { staticRoot, spaFallback: true } : {}),
     ...(authToken ? { authToken, authRequired: true } : {}),
+    ...(deviceTokenRegistry ? { deviceTokenRegistry } : {}),
   });
 }
 

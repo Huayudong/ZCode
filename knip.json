@@ -20,7 +20,13 @@
       ]
     },
     "packages/server": {
-      "entry": ["src/index.ts", "src/entry-stdio.ts", "build-remote.ts"]
+      "entry": [
+        "src/index.ts",
+        "src/entry-stdio.ts",
+        "build-remote.ts",
+        "src/auth/module.ts",
+        "src/auth/contract.example.ts"
+      ]
     },
     "packages/services": {
       "entry": ["src/index.ts", "src/storage/module.ts"]

@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { hostname } from "node:os";
 import { serve } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import type { WebSocket } from "ws";
 import type { WebSocketServer } from "ws";
 import {
@@ -56,6 +56,77 @@ async function closeWebSocketServer(wss: WebSocketServer): Promise<void> {
 function isLoopbackHost(host: string): boolean {
   const normalized = host.trim().toLowerCase();
   return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
+}
+
+const coreLiteTokenCookieName = "zcode_lite_token";
+
+function parseCoreCookieHeader(header: string | undefined): Map<string, string> {
+  const cookies = new Map<string, string>();
+  if (!header) {
+    return cookies;
+  }
+  for (const part of header.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator <= 0) {
+      continue;
+    }
+    const name = part.slice(0, separator).trim();
+    const value = part.slice(separator + 1).trim();
+    if (name) {
+      cookies.set(name, value);
+    }
+  }
+  return cookies;
+}
+
+function coreTimingSafeTokenEqual(presented: string, expected: string): boolean {
+  const left = Buffer.from(presented, "utf8");
+  const right = Buffer.from(expected, "utf8");
+  if (left.length !== right.length) {
+    // 长度不等时仍执行一次比较，保持时间轮廓稳定（防时序侧信道）。
+    timingSafeEqual(left, left);
+    return false;
+  }
+  return timingSafeEqual(left, right);
+}
+
+/**
+ * Core 专用鉴权中间件：与 packages/server tokenGuard 相同的三路凭证提取语义
+ * （Bearer → query → cookie，query 命中种 HttpOnly cookie），仅比对管理员 token。
+ * 返回 undefined 表示未配置鉴权（此时非 loopback 已在上方 fail-closed）。
+ */
+function createCoreTokenGuard(adminToken: string | undefined): MiddlewareHandler | undefined {
+  if (!adminToken) {
+    return undefined;
+  }
+  return async (context, next) => {
+    const pathname = new URL(context.req.url).pathname;
+    const isProtected =
+      pathname === "/ws" || pathname.startsWith("/ws/") || pathname.startsWith("/api/");
+    if (!isProtected) {
+      await next();
+      return;
+    }
+    const url = new URL(context.req.url);
+    const bearerMatch = /^Bearer\s+(.+)$/i.exec(context.req.header("authorization")?.trim() ?? "");
+    const bearerToken = bearerMatch?.[1]?.trim() || undefined;
+    const queryToken = url.searchParams.get("token");
+    const cookieToken = parseCoreCookieHeader(context.req.header("cookie")).get(
+      coreLiteTokenCookieName,
+    );
+    const presented = bearerToken ?? queryToken ?? cookieToken;
+    if (presented && coreTimingSafeTokenEqual(presented, adminToken)) {
+      if (!bearerToken && queryToken !== null) {
+        context.header(
+          "Set-Cookie",
+          `${coreLiteTokenCookieName}=${encodeURIComponent(presented)}; Path=/; HttpOnly; SameSite=Lax`,
+        );
+      }
+      await next();
+      return;
+    }
+    return context.json({ error: "Unauthorized" }, 401);
+  };
 }
 
 function wrapWebSocket(ws: WebSocket): ISocket {
@@ -119,32 +190,45 @@ export async function createCoreHttpServer(
     port?: number;
     serverId?: string;
     hostCapabilityStore?: HostCapabilityStore;
+    /** 管理员 token（E1）：提供时对受保护路径启用同语义鉴权，并允许非 loopback 监听。 */
+    authToken?: string;
   } = {},
 ): Promise<CoreHttpServer> {
   const app = new Hono();
   const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app });
   const host = options.host ?? "127.0.0.1";
-  if (!isLoopbackHost(host)) {
-    // 当前只有本机/SSH 隧道入口，Core 尚未接入 token middleware；对外监听必须 fail-closed。
+  const authToken = options.authToken?.trim() || undefined;
+  // 修复依据（E1/D1，docs/specs/harmony/auth.md）：Core 原先对非 loopback 一律 fail-closed
+  // （"Core 尚未接入 token middleware"）。接入管理员 token 中间件后改为条件放行：
+  // 配置了 token 才允许对外监听，未配置时维持 fail-closed，消除与 packages/server 的安全语义分叉。
+  if (!isLoopbackHost(host) && !authToken) {
     throw new Error(
-      `Non-loopback host ${host} requires authentication before the server can listen`,
+      `Non-loopback host ${host} requires ZCODE_SERVER_AUTH_TOKEN before the server can listen`,
     );
   }
   const info: ServerRemoteInfo = {
     serverId: options.serverId ?? hostname() ?? "zcode-server",
     version: ZCODE_VERSION,
     protocolVersion: SERVER_REMOTE_PROTOCOL_VERSION,
-    authRequired: false,
+    authRequired: Boolean(authToken),
     workspaces: [],
     capabilities: {
       desktopContinuous: true,
       websocketRpc: true,
       processResourceTelemetry: true,
+      ...(authToken ? { authSchemes: ["bearer", "cookie", "query"] } : {}),
     },
   };
   // 裸 Set 无法落实 expiresAt，未消费的 capability 会一直有效并持续累积。
   // 使用与 packages/server 兼容的 TTL 一次性 store，使有效期和消费语义与返回信息一致。
   const capabilities = options.hostCapabilityStore ?? createHostCapabilityStore();
+  // Core 的鉴权是 packages/server tokenGuard 的"仅管理员 token"子集：SSH 隧道形态的
+  // 访问者是人而非多设备，不接 server.auth 设备表；刻意不跨包复用，避免把 server 的
+  // 部署工具链依赖（ssh2/node-pty 等）拖进无头发行包（spec §2 边界说明）。
+  const tokenGuard = createCoreTokenGuard(authToken);
+  if (tokenGuard) {
+    app.use("*", tokenGuard);
+  }
   app.get("/api/server-info", (context) => context.json(info));
   app.get(
     "/ws",
