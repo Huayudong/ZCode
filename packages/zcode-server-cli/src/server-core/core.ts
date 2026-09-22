@@ -42,7 +42,16 @@ export async function runServerCore(generation: number): Promise<void> {
     serviceAuthorityMode: "standalone-server",
   });
   const taskActivityTracker = createTaskActivityTracker(services.getOptional(IZCodeAgentService));
-  const http = await createCoreHttpServer(services, { serverId: await resolveCoreServerId() });
+  // E1：Core 经 supervisor fork 继承父进程 env 获取管理员 token；配置后 Core
+  // 才允许非 loopback 监听并启用鉴权（docs/specs/harmony/auth.md §1）。
+  const coreAuthToken =
+    process.env["ZCODE_SERVER_AUTH_TOKEN"]?.trim() ||
+    process.env["ZCODE_SERVER_TOKEN"]?.trim() ||
+    undefined;
+  const http = await createCoreHttpServer(services, {
+    serverId: await resolveCoreServerId(),
+    ...(coreAuthToken ? { authToken: coreAuthToken } : {}),
+  });
   const send = (message: unknown): Promise<void> => {
     if (typeof process.send !== "function" || process.connected === false) return Promise.resolve();
     return new Promise((resolve) => {

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { basename, extname, relative, resolve, sep } from "node:path";
 import { hostname } from "node:os";
-import { Hono, type Context } from "hono";
+import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
 import type { WebSocket } from "ws";
@@ -37,6 +37,11 @@ import {
 } from "@zcode/shared";
 import { connectRemote, createRemoteBackend, type RemoteConnection } from "./remote/index.js";
 import { createHostCapabilityStore } from "./hostCapability.js";
+import {
+  createTokenGuard,
+  isTokenProtectedPath,
+  type DeviceTokenRegistryPort,
+} from "./auth/contract.js";
 
 function wrapWebSocket(ws: WebSocket): ISocket {
   const onData = new Emitter<VSBuffer>();
@@ -134,6 +139,8 @@ interface HttpServerOptions {
   host?: string;
   authRequired?: boolean;
   authToken?: string;
+  /** 设备 token 注册表（server.auth 模块）；仅与鉴权启用场景搭配（entry-http 在有管理员 token 时接线）。 */
+  deviceTokenRegistry?: DeviceTokenRegistryPort;
   spaFallback?: boolean;
   staticRoot?: string;
   workspaces?: ServerRemoteWorkspaceInfo[];
@@ -150,6 +157,32 @@ function resolveServerId(options: HttpServerOptions): string {
   );
 }
 
+// 旧环境变量只告警一次，避免每个请求刷日志。
+let legacyTokenEnvWarned = false;
+
+/**
+ * 解析生效的管理员 token：显式 options 优先，其次 ZCODE_SERVER_AUTH_TOKEN，
+ * 最后兼容已弃用的 ZCODE_SERVER_TOKEN（告警一次）。
+ * 修复依据：旧实现 server-info 读 ZCODE_SERVER_TOKEN 判定 authRequired，而中间件用
+ * entry-http 传入的 ZCODE_SERVER_AUTH_TOKEN，变量名不一致导致 authRequired 谎报；
+ * 现由本函数作为唯一解析来源，同时供中间件与 server-info 使用（docs/specs/harmony/auth.md §1）。
+ */
+function resolveEffectiveAuthToken(options: HttpServerOptions): string | undefined {
+  if (options.authToken?.trim()) {
+    return options.authToken.trim();
+  }
+  const primary = readTrimmedEnv("ZCODE_SERVER_AUTH_TOKEN");
+  if (primary) {
+    return primary;
+  }
+  const legacy = readTrimmedEnv("ZCODE_SERVER_TOKEN");
+  if (legacy && !legacyTokenEnvWarned) {
+    legacyTokenEnvWarned = true;
+    log("环境变量 ZCODE_SERVER_TOKEN 已弃用，请改用 ZCODE_SERVER_AUTH_TOKEN");
+  }
+  return legacy;
+}
+
 function resolveServerWorkspaces(options: HttpServerOptions): ServerRemoteWorkspaceInfo[] {
   if (options.workspaces) {
     return options.workspaces;
@@ -163,7 +196,7 @@ function resolveServerWorkspaces(options: HttpServerOptions): ServerRemoteWorksp
   ];
 }
 
-function createServerInfo(options: HttpServerOptions): ServerRemoteInfo {
+function createServerInfo(options: HttpServerOptions, authEnabled: boolean): ServerRemoteInfo {
   return {
     serverId: resolveServerId(options),
     ...(options.name?.trim() || readTrimmedEnv("ZCODE_SERVER_NAME")
@@ -171,17 +204,18 @@ function createServerInfo(options: HttpServerOptions): ServerRemoteInfo {
       : {}),
     version: ZCODE_VERSION,
     protocolVersion: SERVER_REMOTE_PROTOCOL_VERSION,
-    authRequired: options.authRequired ?? Boolean(readTrimmedEnv("ZCODE_SERVER_TOKEN")),
+    authRequired: options.authRequired ?? authEnabled,
     workspaces: resolveServerWorkspaces(options),
     capabilities: {
       desktopContinuous: true,
       websocketRpc: true,
       processResourceTelemetry: true,
+      // additive 能力位：旧客户端的 zod 非 strict 解析会忽略未知键，不受影响；
+      // 新客户端对缺失该字段的老 server 需按仅 query/cookie 兜底。
+      ...(authEnabled ? { authSchemes: ["bearer", "cookie", "query"] } : {}),
     },
   };
 }
-
-const zcodeLiteTokenCookieName = "zcode_lite_token";
 
 const staticMimeTypes: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -202,40 +236,8 @@ const staticMimeTypes: Record<string, string> = {
   ".woff2": "font/woff2",
 };
 
-function parseCookieHeader(header: string | undefined): Map<string, string> {
-  const cookies = new Map<string, string>();
-  if (!header) {
-    return cookies;
-  }
-  for (const part of header.split(";")) {
-    const separator = part.indexOf("=");
-    if (separator <= 0) {
-      continue;
-    }
-    const name = part.slice(0, separator).trim();
-    const value = part.slice(separator + 1).trim();
-    if (name) {
-      cookies.set(name, value);
-    }
-  }
-  return cookies;
-}
-
-function hasValidLiteToken(c: Context, token: string): boolean {
-  const url = new URL(c.req.url);
-  if (url.searchParams.get("token") === token) {
-    c.header(
-      "Set-Cookie",
-      `${zcodeLiteTokenCookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax`,
-    );
-    return true;
-  }
-  return parseCookieHeader(c.req.header("cookie")).get(zcodeLiteTokenCookieName) === token;
-}
-
-function isTokenProtectedPath(pathname: string): boolean {
-  return pathname === "/ws" || pathname.startsWith("/ws/") || pathname.startsWith("/api/");
-}
+// 凭证提取与比对逻辑已收拢到 server.auth 模块（adapters/tokenGuard.ts）；
+// 这里只保留鉴权保护面判定，供 SPA fallback 排除受保护路径使用。
 
 function isStaticFallbackAllowed(pathname: string): boolean {
   return !isTokenProtectedPath(pathname);
@@ -301,20 +303,18 @@ export function createHttpServer(
   const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
   const hostCapabilities = createHostCapabilityStore();
 
-  const authToken = options.authToken?.trim();
-  if (authToken) {
-    app.use("*", async (c, next) => {
-      const pathname = new URL(c.req.url).pathname;
-      const validToken = hasValidLiteToken(c, authToken);
-      if (!isTokenProtectedPath(pathname) || validToken) {
-        await next();
-        return;
-      }
-      return c.json({ error: "Unauthorized" }, 401);
-    });
+  // 管理员 token 唯一解析来源（含旧环境变量兼容与告警），同时供 server-info 使用。
+  const effectiveAuthToken = resolveEffectiveAuthToken(options);
+  const authEnabled = Boolean(effectiveAuthToken) || Boolean(options.deviceTokenRegistry);
+  const tokenGuard = createTokenGuard({
+    adminToken: effectiveAuthToken,
+    deviceTokenRegistry: options.deviceTokenRegistry,
+  });
+  if (tokenGuard) {
+    app.use("*", tokenGuard);
   }
 
-  app.get("/api/server-info", (c) => c.json(createServerInfo(options)));
+  app.get("/api/server-info", (c) => c.json(createServerInfo(options, authEnabled)));
   app.post("/api/rpc-host-capability", (c) => c.json(hostCapabilities.issue()));
 
   // 普通 `/ws` 永远是 terminal-client；浏览器/任意客户端设置旧 mode header
