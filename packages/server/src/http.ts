@@ -3,8 +3,9 @@ import { randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { basename, extname, relative, resolve, sep } from "node:path";
 import { hostname } from "node:os";
+import https from "node:https";
 import { Hono } from "hono";
-import { serve } from "@hono/node-server";
+import { getRequestListener, serve } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
 import type { WebSocket } from "ws";
 import {
@@ -48,6 +49,7 @@ import {
   createPairingRoutes,
   type PairingServicePort,
 } from "./pairing/contract.js";
+import type { TlsMaterial } from "./tls/contract.js";
 
 function wrapWebSocket(ws: WebSocket): ISocket {
   const onData = new Emitter<VSBuffer>();
@@ -149,8 +151,8 @@ interface HttpServerOptions {
   deviceTokenRegistry?: DeviceTokenRegistryPort;
   /** 配对服务（server.pairing 模块）；与 deviceTokenRegistry 同时接线才生效。 */
   pairingService?: PairingServicePort;
-  /** 自签证书 SPKI 指纹（E3），随配对响应下发给 App 做证书固定。 */
-  certFingerprint?: string;
+  /** TLS 材料（server.tls 模块解析）；提供时以 HTTPS/WSS 监听并下发证书指纹。 */
+  tls?: TlsMaterial;
   spaFallback?: boolean;
   staticRoot?: string;
   workspaces?: ServerRemoteWorkspaceInfo[];
@@ -223,6 +225,8 @@ function createServerInfo(options: HttpServerOptions, authEnabled: boolean): Ser
       // additive 能力位：旧客户端的 zod 非 strict 解析会忽略未知键，不受影响；
       // 新客户端对缺失该字段的老 server 需按仅 query/cookie 兜底。
       ...(authEnabled ? { authSchemes: ["bearer", "cookie", "query"] } : {}),
+      // 证书固定指纹：仅 TLS 启用时下发（tls spec §1）。
+      ...(options.tls ? { certFingerprint: options.tls.certFingerprint } : {}),
     },
   };
 }
@@ -340,9 +344,7 @@ export function createHttpServer(
         serverIdentity: {
           serverId: resolveServerId(options),
           ...(options.name?.trim() ? { name: options.name.trim() } : {}),
-          ...(options.certFingerprint?.trim()
-            ? { certFingerprint: options.certFingerprint.trim() }
-            : {}),
+          ...(options.tls ? { certFingerprint: options.tls.certFingerprint } : {}),
         },
       }),
     );
@@ -444,12 +446,27 @@ export function createHttpServer(
     });
   }
 
-  const server = serve({ fetch: app.fetch, hostname: options.host, port }, () => {
-    const address = server.address();
-    const listenPort = typeof address === "object" && address ? address.port : port;
-    const listenHost = options.host?.trim() || "localhost";
-    log(`http://${listenHost}:${listenPort}`);
-  });
+  let server: ReturnType<typeof serve>;
+  if (options.tls) {
+    // TLS 模式：https.createServer + getRequestListener（WSS 经 injectWebSocket 同源升级）。
+    server = https.createServer(
+      { cert: options.tls.certPem, key: options.tls.keyPem },
+      getRequestListener(app.fetch),
+    );
+    server.listen(port, options.host, () => {
+      const address = server.address();
+      const listenPort = typeof address === "object" && address ? address.port : port;
+      const listenHost = options.host?.trim() || "localhost";
+      log(`https://${listenHost}:${listenPort}`);
+    });
+  } else {
+    server = serve({ fetch: app.fetch, hostname: options.host, port }, () => {
+      const address = server.address();
+      const listenPort = typeof address === "object" && address ? address.port : port;
+      const listenHost = options.host?.trim() || "localhost";
+      log(`http://${listenHost}:${listenPort}`);
+    });
+  }
 
   injectWebSocket(server);
 

@@ -18,6 +18,7 @@ import {
   WandSparkles,
   Keyboard,
   FileSearch,
+  Smartphone,
 } from "lucide-react";
 import { isSettingsSectionEnabled, type SettingsSectionId } from "@/lib/settingsNavigation.js";
 import type { Theme } from "@/useTheme.js";
@@ -148,6 +149,13 @@ const BASE_SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     id: "workspaceFileSearch",
     icon: FileSearch,
     titleId: "settings.workspaceFileSearch.title",
+    groupId: "basics",
+  },
+  // 移动端配对：鸿蒙 App 扫码绑定本 Server（Harmony 配套），收在基础设置末尾。
+  {
+    id: "mobilePairing",
+    icon: Smartphone,
+    titleId: "settings.mobilePairing.title",
     groupId: "basics",
   },
   {

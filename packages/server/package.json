@@ -12,7 +12,7 @@
     "dev": "tsup --watch --onSuccess 'node dist/entry-http.js'",
     "build": "tsup && pnpm run build:remote",
     "build:remote": "tsx build-remote.ts",
-    "test": "node --import tsx --test \"test/**/*.test.ts\"",
+    "test": "node --import tsx --test --test-concurrency=1 \"test/**/*.test.ts\"",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix"
   },
