@@ -481,6 +481,19 @@ M4 公测上架：A13 合规材料（软著/隐私标签/生成内容定位说�
 | 网络指南 | ✅ | `docs/harmony-networking.md`：Tailscale（推荐）/局域网直连/自有证书与反代三方案 + "不要端口映射裸奔"告诫 |
 | 门禁 | ✅ | server 测试 28/28（auth 13 + pairing 9 + tls 6，串行跑两遍稳定——并行时 auth 用例曾出现 Windows rename 竞争偶发，test script 已加 `--test-concurrency=1`）、server-cli 3/3、typecheck 全仓 0 错误、architecture 0 违规（含 server.tls）、定向 lint 0 错误且新文件 0 警告 |
 
+### Batch 4（2026-09-22）：鸿蒙仓脚手架 + 协议移植第一层 + zod spike
+
+| 项 | 状态 | 产物 |
+| --- | --- | --- |
+| 鸿蒙仓创建 | ✅ | **仓库位置调整为 `E:\program\zcode-harmony`**（用户决策：F 盘 USB 读写太慢；旧 `F:\program\zcode-harmony` 目录弃用）。hap 多模块工程：entry + commons/{uikit,utils,protocol}（HAR），API 12 stageMode，git 已 init（commit e911822，**远程地址待用户提供后推送**） |
+| entry 模块 | ✅ | 首页演示主题/光感按钮/状态灯；`zcode://pair` 深链 skills 预留 + INTERNET/VIBRATE 权限 |
+| uikit | ✅ | `ZcodeColors` 语义色 token（PRD 5.2 映射、深色默认）、`LightBloomButton`（L1 四层光感 + 按压状态机 + destructive 描边变体；Vibrator 后续接入）、`StatusDot` 三态灯（1s 心跳脉冲） |
+| protocol 移植 P1 | ✅ | `@zcode/rpc` L0-L2：VSBuffer / 序列化（VQL+类型标签，纯 TS base64 替换 Buffer/btoa 探测）/ Emitter 子集 / ChunkStream + SocketProtocol + createQueuePair。ArkTS 严格转换在 DevEco 就绪后按编译反馈收敛（.ts 文件先行） |
+| 协议一致性门禁 | ✅ 6/6 通过 | `tools/protocol-consistency`：同向量喂原包（`@zcode/rpc` TS 源）与移植层，**编码逐字节一致**（16 基础类型 + Uint8Array + 嵌套 base64 恢复 + 嵌套对象）、13 字节帧逐字节一致、1/3/7/2/11 奇数边界分片重组消息序列一致、queuePair 环回。运行：`cd tools/protocol-consistency && npm i && npm test` |
+| zod spike 阶段 1 | ✅ 初步可行 | `docs/spike-zod-arkts.md`：第三方 npm 消费不受 ArkTS 严格检查约束、运行时 API 兼容、本仓库用量为核心稳定 API；阶段 2 动态验证清单（hvigor 构建 + 冒烟 + 性能基线）待 DevEco 就绪执行 |
+
+门禁说明：本批验证在 E 盘本仓直接执行（一致性测试 6/6；ArkTS 编译验证属 DevEco 阶段，未执行——需 DevEco Studio Sync + 构建，已如实标注）。
+
 ## 11. 下一步（按顺序）
 
 1. 确认 §9 的 Q1-Q4（Q3 阻塞 A6 的 INP-6 spec）；
