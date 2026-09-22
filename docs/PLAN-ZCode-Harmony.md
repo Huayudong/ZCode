@@ -494,6 +494,17 @@ M4 公测上架：A13 合规材料（软著/隐私标签/生成内容定位说�
 
 门禁说明：本批验证在 E 盘本仓直接执行（一致性测试 6/6；ArkTS 编译验证属 DevEco 阶段，未执行——需 DevEco Studio Sync + 构建，已如实标注）。
 
+### Batch 4 收尾（2026-09-22）：DevEco 构建打通 + ArkTS 编译收敛 + Previewer 首页渲染验证（commit 46dd382，已推送）
+
+| 项 | 结果 |
+| --- | --- |
+| 构建配置修复 | 根 `oh-package.json5` 补 `modelVersion`（hvigor 6.24.4 要求与 hvigor-config.json5 同时声明）；`entry/hvigorfile.ts` 误用 `appTasks` 改为 `hapTasks`；补齐三个 HAR 的 `src/main/module.json5`；`build-profile.json5` 增加 `preview` buildModeSet 与 `targetSdkVersion`（同时消除 IDE 打开时的「配置targetSdkVersion」模态框） |
+| ArkTS 编译收敛 | 10 个编译错误清零：`Breakpoint.ets` 枚举与类同名声明合并非法 → 拆为 `BreakpointLevel` 枚举 + `Breakpoint` 工具类单一所有者（吸收 BreakpointUtil）；`StatusDot.size`→`dotSize`、`LightBloomButton.enabled`→`isEnabled`（避开 ArkUI CustomComponent 基类同名通用属性） |
+| 构建验证 | `hvigorw --mode module -p module=entry@default assembleHap` **BUILD SUCCESSFUL**（entry-default-unsigned.hap；无签名配置跳过签名属预期）；DevEco Studio 6.1 打开工程 hvigor sync 成功（约 40s） |
+| Previewer 渲染验证 | CLI 生成 `.preview` 产物（`PreviewBuild` + `-p previewMode=true -p buildRoot=.preview` 等 IDE 同款参数）后，直接以完整参数拉起 `Previewer.exe` 无头渲染：`-ljPath loader.json`（模块映射关键参数，缺它报 `Cannot find module 'ets/pages/Index'`）+ `-rt/-rp/-cjp/-j/-abp` 等；引擎 websocket（127.0.0.1 随机端口）以 `12345678` 魔数帧输出 1080×2340 JPEG 渲染帧，约 2 帧/秒交替（StatusDot 脉冲动画存活证据）。OCR 比对全部 UI 元素命中：ZCode Harmony / 副标题 / 正在重构模块 / 发送（宽屏）/ 已发送 0 条 / v0.1.0 scaffold·sm。截图入库：`docs/preview-首页效果-批次4.jpg` |
+
+经验记录：① 本机透明加密驱动导致本会话所有新写图片文件无法被 Read 工具解码（旧文件正常），视觉验证改走「抓帧→Windows OCR（PowerShell WinRT）」文本通道；② DevEco Previewer 完整参数可从 `idea.log` 的 `Start engine args` / `HvigorRunConfiguration` 行反推，无需启动 IDE。
+
 ## 11. 下一步（按顺序）
 
 1. 确认 §9 的 Q1-Q4（Q3 阻塞 A6 的 INP-6 spec）；
