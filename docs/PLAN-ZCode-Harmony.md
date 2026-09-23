@@ -505,6 +505,20 @@ M4 公测上架：A13 合规材料（软著/隐私标签/生成内容定位说�
 
 经验记录：① 本机透明加密驱动导致本会话所有新写图片文件无法被 Read 工具解码（旧文件正常），视觉验证改走「抓帧→Windows OCR（PowerShell WinRT）」文本通道；② DevEco Previewer 完整参数可从 `idea.log` 的 `Start engine args` / `HvigorRunConfiguration` 行反推，无需启动 IDE。
 
+### Batch 5（2026-09-23）：A3 配对向导 + 最小连接层（App）+ 配对证书端点（Server）
+
+| 项 | 状态 | 产物 |
+| --- | --- | --- |
+| 信任链设计 | ✅ | **证书带外分发**：ohos TLS 栈无自定义校验钩子、自签证书首次接触必拒 → 证书经二维码深链带外分发（桌面新端点 `GET /api/pairing/cert` 公开返回 PEM，QR 追加 `cert=<base64 DER>`），App 本地校验 SHA-256(SPKI)===fp（cryptoFramework）后落沙箱作 caPath 固定（http/webSocket `caPath` @since 12）。spec：鸿蒙仓 `docs/specs/a3-pairing.md` §1.1 + 本仓 pairing.md 增补 |
+| Server 增补 | ✅ 测试 10/10 | `GET /api/pairing/cert`（publicPaths，无 TLS 404）；MobilePairingSection 出码取 PEM 拼 QR（P7 路由层用例） |
+| App 连接层 | ✅ 构建通过 | 鸿蒙仓新增 `commons/connection` HAR：PairCodeLink（深链解析）、CertPinning（SPKI SHA-256）、PinnedHttpClient（固定 CA JSON 客户端 + 封闭错误枚举）、WsProbe（WSS 握手探针）、PairingClient（claim/server-info）、ProfileStore（preferences）/AssetTokenStore（Asset Kit，token 不落明文） |
+| App 页面 | ✅ 构建通过 | 首页未连接态改造；ONB-1 欢迎页；ONB-4 粘贴深链/手动表单（解析摘要 + 指纹状态展示）；ONB-5 三步自检（①HTTPS+claim ②WSS 握手为真实探测、③会话拉取占位待 L3/L4）；EntryAbility `zcode://pair` 冷/热启动路由。arkts 收敛：@ohos 模块默认导入、无 any/unknown、对象字面量全部显式类型 |
+| 渲染验证 | ⚠️ 部分 | Index 未连接态渲染验证通过（`docs/preview-首页-未连接.jpg`，OCR 全元素命中）；向导三页复验被**本机 commit 内存耗尽**阻塞（ArkRuntime 512MB 连续虚拟内存申请失败 err 1455，机器 commit 34.9/36.3GB），复验命令：`tools/preview/render-page.js <page> <out.jpg> 12000 .preview`（需先 PreviewBuild + FakeUIAbility 指向目标页 + 核对产物路由表——增量缓存可能过期，坑已记录在脚本头注释） |
+| 组件修复 | ✅ | LightBloomButton：linearGradient/shadow 传 undefined 在预览器兼容层触发 0xc0000005 崩溃 → 一律传对象值 |
+
+经验：① ArkTS 中 @ohos 模块需默认导入（命名导入只带值不带类型命名空间，级联 any 推断错误）；② 预览产物 `.preview` 的 main_pages.json 受增量缓存影响可能过期，RunPage 未注册页会原生崩溃；③ 驱动对 bash/sed 写入的文件会让 hvigor 随机读出 ENOENT/RollupError，用 node 重写文件可复位；④ 加密驱动会把 git 暂存的二进制读成块对齐密文（截图提交 73102→77824B），重新 add 即恢复明文。
+
+
 ## 11. 下一步（按顺序）
 
 1. 确认 §9 的 Q1-Q4（Q3 阻塞 A6 的 INP-6 spec）；

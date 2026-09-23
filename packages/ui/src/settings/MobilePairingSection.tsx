@@ -31,6 +31,7 @@ function buildPairUrl(options: {
   pairCode: string;
   serverName?: string;
   certFingerprint?: string;
+  certPem?: string;
 }): string {
   const params = new URLSearchParams();
   params.set("host", window.location.hostname);
@@ -43,6 +44,15 @@ function buildPairUrl(options: {
   const fingerprint = options.certFingerprint?.trim();
   if (fingerprint) {
     params.set("fp", fingerprint);
+  }
+  // 证书带外分发（pairing spec §1，鸿蒙 a3-pairing spec §1.1）：PEM 去头尾即 base64 DER，
+  // 手机端本地校验 SHA-256(SPKI) === fp 后作为 caPath 固定。
+  const certBase64 = options.certPem
+    ?.replace(/-----BEGIN CERTIFICATE-----/, "")
+    .replace(/-----END CERTIFICATE-----/, "")
+    .replace(/\s+/g, "");
+  if (certBase64) {
+    params.set("cert", certBase64);
   }
   return `zcode://pair?${params.toString()}`;
 }
@@ -124,11 +134,16 @@ export function MobilePairingSection({ isDesktop }: { isDesktop: boolean }) {
       if (issueRequestIdRef.current !== requestId) {
         return;
       }
+      // TLS 部署时把证书随二维码带外分发（404 = 纯 HTTP，深链不含 cert 参数）。
+      const certBody = body.certFingerprint
+        ? await fetchPairingApi<{ certPem: string }>("/api/pairing/cert").catch(() => null)
+        : null;
       const pairUrl = buildPairUrl({
         pairCode: body.pairCode,
         certFingerprint: body.certFingerprint,
+        certPem: certBody?.certPem,
       });
-      const dataUrl = await QRCode.toDataURL(pairUrl, { margin: 1, width: 220 });
+      const dataUrl = await QRCode.toDataURL(pairUrl, { margin: 1, width: 260 });
       if (issueRequestIdRef.current !== requestId) {
         return;
       }

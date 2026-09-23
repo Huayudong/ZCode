@@ -17,6 +17,8 @@ export interface PairingServerIdentity {
   name?: string;
   /** 自签证书 SPKI SHA-256 hex（E3 接入后携带；当前缺省）。 */
   certFingerprint?: string;
+  /** 自签证书 PEM（Batch 5：`GET /api/pairing/cert` 下发给桌面 UI，随二维码带外分发；仅 TLS 启用时携带）。 */
+  certPem?: string;
 }
 
 export interface CreatePairingRoutesOptions {
@@ -31,7 +33,11 @@ export const PAIRING_ADMIN_ONLY_PATHS = [
   "/api/pairing/devices",
 ] as const;
 
-export const PAIRING_PUBLIC_PATHS = ["/api/pairing/claim"] as const;
+export const PAIRING_PUBLIC_PATHS = [
+  "/api/pairing/claim",
+  // 证书内容本就是公开材料（任何能建立 TLS 的客户端都能拿到），公开端点便于桌面 UI 随二维码带外分发。
+  "/api/pairing/cert",
+] as const;
 
 function remoteIpOf(c: { env?: unknown }): string {
   // @hono/node-server 的 env 携带 Node incoming；拿不到时归并为单一桶。
@@ -104,6 +110,14 @@ export function createPairingRoutes(options: CreatePairingRoutesOptions): Hono {
       }
       return c.json({ error: "Failed to issue device token" }, 500);
     }
+  });
+
+  routes.get("/api/pairing/cert", (c) => {
+    // 行为规范：docs/specs/harmony/pairing.md §1（Batch 5 增补，鸿蒙 a3-pairing spec §1.1）。
+    if (!serverIdentity.certPem) {
+      return c.json({ error: "TLS not enabled" }, 404);
+    }
+    return c.json({ certPem: serverIdentity.certPem });
   });
 
   routes.get("/api/pairing/devices", async (c) => {

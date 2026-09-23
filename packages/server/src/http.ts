@@ -344,7 +344,9 @@ export function createHttpServer(
         serverIdentity: {
           serverId: resolveServerId(options),
           ...(options.name?.trim() ? { name: options.name.trim() } : {}),
-          ...(options.tls ? { certFingerprint: options.tls.certFingerprint } : {}),
+          ...(options.tls
+            ? { certFingerprint: options.tls.certFingerprint, certPem: options.tls.certPem }
+            : {}),
         },
       }),
     );

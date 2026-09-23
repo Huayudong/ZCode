@@ -16,10 +16,12 @@
 | --- | --- | --- | --- |
 | `POST /api/pairing/code` | 管理员 token | `{}` | `{ pairCode, pairCodeId, expiresAt, certFingerprint? }` |
 | `POST /api/pairing/claim` | pairCode（body 携带，公开路径） | `{ pairCode, deviceName, pushToken? }` | `{ accessToken, serverId, serverName?, certFingerprint? }` |
+| `GET /api/pairing/cert` | 公开（本批增补） | — | `{ certPem }`（TLS 启用时；未启用 404 `{ error: "TLS not enabled" }`） |
 | `GET /api/pairing/devices` | 管理员 token | — | `{ devices: DeviceTokenRecord[] }`（复用 auth 模块记录） |
 | `DELETE /api/pairing/devices/:id` | 管理员 token | — | `{ ok: true }`（吊销，透传 auth 模块；id 不存在返回 404） |
 
 - **二维码 URL 由桌面 UI 拼装**（Batch 2 细化决策）：server 返回 `pairCode` 明文与 `expiresAt`，Web 设置页用自身 `location.hostname`/`port` 组装 `zcode://pair?host=…&port=…&token=<pairCode>&name=<serverName>&fp=<certFingerprint?>`——server 侧 `options.host` 可能是 `0.0.0.0`/undefined，无法替手机选出正确局域网地址；用户打开 Web 用的主机名才是手机可达地址。`fp` 为自签证书 SPKI SHA-256 hex（E3 提供时携带）；各值 `encodeURIComponent`。
+- **证书带外分发（Batch 5 增补，鸿蒙 A3 信任链）**：`GET /api/pairing/cert` 公开端点返回自签证书 PEM（浏览器已与 server 同源，取证书不需要额外信任）；桌面出码时把它转成 `cert=<base64 DER>` 追加进深链——手机端以「SHA-256(证书 SPKI) === fp」本地校验后，将该证书作为后续 HTTPS/WSS 的 `caPath` 固定（信任锚来自桌面屏幕这一带外信道，局域网 MITM 无法伪造匹配 fp 的证书）。纯 HTTP 部署（无 TLS）该端点 404，深链不含 `cert` 参数。设计细节见鸿蒙仓 `docs/specs/a3-pairing.md` §1.1。
 - **鉴权分级落在 tokenGuard**（单一守卫路径）：`adminOnlyPaths`（`/api/pairing/code`、`/api/pairing/devices`）——设备 token 命中返回 **403**，无凭证/凭证无效返回 401；`publicPaths`（`/api/pairing/claim`）——免管理员鉴权，由一次性 pairCode 自身保护。
 - `pairCode`：CSPRNG 随机（`zpc_` + 32 hex）、TTL 5 分钟、**一次性**；同一时刻未消费 pairCode 至多 1 个（新签发作废旧的）。
 - `claim` 成功即调用 auth 模块 `issue({ deviceName })` 签发设备 accessToken；`pushToken` 可选、≤256 字符、仅存内存（E5 消费，不落盘不入日志）。
