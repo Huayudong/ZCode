@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { createDeviceTokenRegistry, type DeviceTokenRegistryPort } from "../src/auth/contract.js";
 import { createPairingService } from "../src/pairing/adapters/createPairingService.js";
+import { createPairingRoutes } from "../src/pairing/adapters/pairingRoutes.js";
 import type { PairingServicePort } from "../src/pairing/contract.js";
 import { startTestHttpServer, type TestHttpServerHandle } from "./helpers/testServer.js";
 
@@ -232,5 +233,29 @@ describe("server.pairing 配对服务", () => {
       body: JSON.stringify({ pairCode, deviceName: "overflow" }),
     });
     assert.equal(replay.status, 401);
+  });
+
+  it("P7 GET /api/pairing/cert：TLS 启用返回 PEM，未启用 404（路由层直测，配对 spec §1 Batch 5 增补）", async () => {
+    const deviceRegistry = createDeviceTokenRegistry({
+      filePath: join(await mkdtemp(join(tmpdir(), "zcode-pairing-cert-")), "tokens.json"),
+    });
+    const pairingService = createPairingService({ deviceRegistry, clock: createTestClock() });
+    const certPem = "-----BEGIN CERTIFICATE-----\nZCODE-TEST\n-----END CERTIFICATE-----\n";
+    const withTls = createPairingRoutes({
+      pairingService,
+      deviceRegistry,
+      serverIdentity: { serverId: "s-test", certFingerprint: "aabb", certPem },
+    });
+    const ok = await withTls.request("/api/pairing/cert");
+    assert.equal(ok.status, 200);
+    assert.equal(((await ok.json()) as { certPem: string }).certPem, certPem);
+
+    const withoutTls = createPairingRoutes({
+      pairingService,
+      deviceRegistry,
+      serverIdentity: { serverId: "s-test" },
+    });
+    const missing = await withoutTls.request("/api/pairing/cert");
+    assert.equal(missing.status, 404);
   });
 });
