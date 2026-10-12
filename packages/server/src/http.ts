@@ -14,6 +14,9 @@ import {
   SocketProtocol,
   ChannelServer,
   LoggingChannelServer,
+  ProtocolMessage,
+  ProtocolMessageType,
+  writeProtocolMessage,
   type ISocket,
 } from "@zcode/rpc";
 import {
@@ -102,6 +105,21 @@ function setupChannelServer(
   clientMode: "desktop-continuous" | "web-remote-replayable",
 ) {
   const socket = wrapWebSocket(ws);
+  // 单向活性心跳：/ws 各端点统一每 5s 下发一帧 KeepAlive（type 9，13 字节零负载）。
+  // SocketProtocol/PersistentProtocol 均安全吞掉该帧；移动端依赖它做入站静默判死
+  // （server 进程消失且客户端收不到 FIN 的场景，UI 不能停留在"已连接"）。
+  // 仅下行，无 ACK 语义。
+  const keepAliveTimer = setInterval(() => {
+    try {
+      socket.write(
+        writeProtocolMessage(
+          new ProtocolMessage(ProtocolMessageType.KeepAlive, 0, 0, VSBuffer.alloc(0)),
+        ),
+      );
+    } catch {
+      // 发送失败由 socket error/close 事件兜底
+    }
+  }, 5_000);
   const protocol = new SocketProtocol(socket);
   const rawServer = new ChannelServer(protocol, "server");
   // 用日志中间件包装，统一记录所有 RPC 调用
@@ -132,6 +150,7 @@ function setupChannelServer(
   }
   services.exposeOnChannelServer(server, overrides);
   socket.onClose(() => {
+    clearInterval(keepAliveTimer);
     void connectionScope?.dispose();
     rawServer.dispose();
   });

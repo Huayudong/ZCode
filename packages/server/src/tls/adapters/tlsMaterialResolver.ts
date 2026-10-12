@@ -120,5 +120,8 @@ function collectLocalAltNames(): string[] {
       }
     }
   }
+  // DevEco/Android 系模拟器的 QEMU NAT 把宿主环回暴露为 10.0.2.2；模拟器 app 以该地址
+  // 直连本 server，主机名校验要求它必须在 SAN 里（缺失即 "Invalid SSL peer certificate"）。
+  names.add("10.0.2.2");
   return [...names];
 }
