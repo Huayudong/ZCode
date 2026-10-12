@@ -66,10 +66,15 @@ export class ChannelServer<TContext = string> implements IChannelServer<TContext
   }
 
   private onRawMessage(message: VSBuffer): void {
-    const reader = new BufferReader(message);
-    const header = deserialize(reader);
-    const body = deserialize(reader);
-    const type = header[0] as RequestType;
+    // 单个客户端的坏帧（非法 tag、长度越界、半包拼接）绝不能炸掉整个 server：
+    // deserialize 抛错或返回非数组（如 Undefined tag）都会在取下标/分发时抛异常
+    //（2026-10-12 联调实测两种路径各崩过一次）。这里整段 fail-soft：丢弃该帧、
+    // 记录日志；该连接的流若已错位，后续帧同样被丢弃直至对端重连。
+    try {
+      const reader = new BufferReader(message);
+      const header = deserialize(reader) as unknown[];
+      const body = deserialize(reader);
+      const type = header[0] as RequestType;
 
     switch (type) {
       case RequestType.Promise:
@@ -94,6 +99,12 @@ export class ChannelServer<TContext = string> implements IChannelServer<TContext
       case RequestType.EventDispose:
         this.disposeActiveRequest(header[1]);
         return;
+    }
+    } catch (error) {
+      console.error(
+        "[zcode-rpc] malformed RPC frame dropped:",
+        error instanceof Error ? error.message : String(error),
+      );
     }
   }
 
