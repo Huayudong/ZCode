@@ -72,7 +72,9 @@ export class ChannelServer<TContext = string> implements IChannelServer<TContext
     // 记录日志；该连接的流若已错位，后续帧同样被丢弃直至对端重连。
     try {
       const reader = new BufferReader(message);
-      const header = deserialize(reader) as unknown[];
+      // deserialize 返回 any：不要收窄成 unknown[]——那会让 header[1]/[2] 退化成
+      // unknown，pnpm typecheck 全量报 TS2322（批次20 补丁引入，批次26 复现）。
+      const header = deserialize(reader);
       const body = deserialize(reader);
       const type = header[0] as RequestType;
 
